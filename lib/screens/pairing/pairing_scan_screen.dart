@@ -119,7 +119,7 @@ class _PairingScanScreenState extends State<PairingScanScreen>
                 autofocus: true,
                 decoration: const InputDecoration(
                   labelText: 'Pairing URL',
-                  hintText: 'liftelligence://pair?host=...&port=...&token=...',
+                  hintText: 'liftelligence://pair?nfc_id=...&token=...',
                 ),
               ),
               const SizedBox(height: 12),
@@ -221,8 +221,7 @@ class _PairingScanScreenState extends State<PairingScanScreen>
                     TextButton(
                       onPressed: () => _pop(
                         const PairingPayload(
-                          host: '127.0.0.1',
-                          port: 5001,
+                          nfcId: 'DEMO_NFC_ID',
                           token: 'DEMO_TOKEN',
                         ),
                       ),

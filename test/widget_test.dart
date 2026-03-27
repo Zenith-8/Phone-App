@@ -16,8 +16,7 @@ void main() {
       'liftelligence_user_email': 'demo@liftelligence.local',
       'liftelligence_paired': true,
       'liftelligence_paired_offline': true,
-      'liftelligence_pair_host': '127.0.0.1',
-      'liftelligence_pair_port': 5001,
+      'liftelligence_pair_nfc_id': 'AABBCCDD',
       'liftelligence_pair_token': 'DEMO1234',
     });
 

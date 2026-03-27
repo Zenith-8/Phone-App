@@ -118,9 +118,10 @@ class _PairingSuccessScreenState extends State<PairingSuccessScreen>
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      '${widget.payload.host}:${widget.payload.port} - Token ${widget.payload.maskedToken()}',
+                      'NFC Card: ${widget.payload.nfcId.toUpperCase()}',
                       style: TextStyle(
                         color: scheme.onSurface.withValues(alpha: 0.72),
+                        fontFamily: 'monospace',
                       ),
                       textAlign: TextAlign.center,
                     ),

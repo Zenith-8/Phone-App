@@ -16,6 +16,9 @@ class AppSession extends ChangeNotifier {
   PairingPayload? _payload;
   String? _pairedUid;
 
+  /// Payload received via deep link that hasn't been acted on yet.
+  PairingPayload? _pendingDeepLinkPayload;
+
   bool get isLoaded => _loaded;
   bool get hasSeenOnboarding => _seenOnboarding;
   bool get isSignedIn => _signedIn;
@@ -26,6 +29,22 @@ class AppSession extends ChangeNotifier {
   bool get pairedOffline => _pairedOffline;
   PairingPayload? get pairingPayload => _payload;
   String? get pairedUid => _pairedUid;
+
+  PairingPayload? get pendingDeepLinkPayload => _pendingDeepLinkPayload;
+
+  /// Store a deep-link payload so it can be consumed once the user reaches
+  /// the pairing screen (possibly after signing in first).
+  void setPendingDeepLink(PairingPayload payload) {
+    _pendingDeepLinkPayload = payload;
+    notifyListeners();
+  }
+
+  /// Consume (clear) the pending deep-link payload.
+  PairingPayload? consumePendingDeepLink() {
+    final p = _pendingDeepLinkPayload;
+    _pendingDeepLinkPayload = null;
+    return p;
+  }
 
   Future<void> load() async {
     _signedIn = await AppPrefs.loadSignedIn();

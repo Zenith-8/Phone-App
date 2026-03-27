@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../config/server_config.dart';
+
 class PairResponse {
   const PairResponse({
     required this.ok,
@@ -19,9 +21,13 @@ class PairResponse {
 class NfcLoginServerClient {
   const NfcLoginServerClient();
 
+  /// Sends a pair request to the server.
+  ///
+  /// [host] and [port] default to the values in `server_config.dart` so
+  /// callers do not need to pass them unless overriding.
   Future<PairResponse> pair({
-    required String host,
-    required int port,
+    String host = kDefaultServerHost,
+    int port = kDefaultServerPort,
     required String token,
     required String first,
     required String last,

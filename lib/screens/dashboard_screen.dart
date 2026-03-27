@@ -379,7 +379,7 @@ class _HomePanel extends StatelessWidget {
                 subtitle: Text(
                   pairingPayload == null
                       ? 'No payload saved yet.'
-                      : '${pairingPayload!.host}:${pairingPayload!.port} - token ${pairingPayload!.maskedToken()}',
+                      : 'NFC ${pairingPayload!.maskedNfcId()} - token ${pairingPayload!.maskedToken()}',
                 ),
                 trailing: pairedOffline
                     ? const Chip(label: Text('Demo'))

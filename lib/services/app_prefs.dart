@@ -16,8 +16,7 @@ abstract final class AppPrefs {
   static const _pairedKey = 'liftelligence_paired';
   static const _pairedOfflineKey = 'liftelligence_paired_offline';
   static const _pairedUidKey = 'liftelligence_paired_uid';
-  static const _pairHostKey = 'liftelligence_pair_host';
-  static const _pairPortKey = 'liftelligence_pair_port';
+  static const _pairNfcIdKey = 'liftelligence_pair_nfc_id';
   static const _pairTokenKey = 'liftelligence_pair_token';
 
   static Future<bool> loadSignedIn() async {
@@ -110,23 +109,20 @@ abstract final class AppPrefs {
 
   static Future<PairingPayload?> loadPairingPayload() async {
     final p = await SharedPreferences.getInstance();
-    final host = p.getString(_pairHostKey);
-    final port = p.getInt(_pairPortKey);
+    final nfcId = p.getString(_pairNfcIdKey);
     final token = p.getString(_pairTokenKey);
-    if (host == null || host.isEmpty || port == null || token == null || token.isEmpty) return null;
-    return PairingPayload(host: host, port: port, token: token);
+    if (nfcId == null || nfcId.isEmpty || token == null || token.isEmpty) return null;
+    return PairingPayload(nfcId: nfcId, token: token);
   }
 
   static Future<void> setPairingPayload(PairingPayload? payload) async {
     final p = await SharedPreferences.getInstance();
     if (payload == null) {
-      await p.remove(_pairHostKey);
-      await p.remove(_pairPortKey);
+      await p.remove(_pairNfcIdKey);
       await p.remove(_pairTokenKey);
       return;
     }
-    await p.setString(_pairHostKey, payload.host);
-    await p.setInt(_pairPortKey, payload.port);
+    await p.setString(_pairNfcIdKey, payload.nfcId);
     await p.setString(_pairTokenKey, payload.token);
   }
 
@@ -138,8 +134,7 @@ abstract final class AppPrefs {
     await p.remove(_pairedKey);
     await p.remove(_pairedOfflineKey);
     await p.remove(_pairedUidKey);
-    await p.remove(_pairHostKey);
-    await p.remove(_pairPortKey);
+    await p.remove(_pairNfcIdKey);
     await p.remove(_pairTokenKey);
   }
 
@@ -152,8 +147,7 @@ abstract final class AppPrefs {
     await p.remove(_pairedKey);
     await p.remove(_pairedOfflineKey);
     await p.remove(_pairedUidKey);
-    await p.remove(_pairHostKey);
-    await p.remove(_pairPortKey);
+    await p.remove(_pairNfcIdKey);
     await p.remove(_pairTokenKey);
   }
 }

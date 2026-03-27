@@ -1,6 +1,7 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
+import '../../config/server_config.dart';
 import '../../services/app_session.dart';
 import '../../services/nfc_login_server_client.dart';
 import '../../services/pairing_payload.dart';
@@ -10,9 +11,16 @@ import 'pairing_scan_screen.dart';
 import 'pairing_success_screen.dart';
 
 class PairingScreen extends StatefulWidget {
-  const PairingScreen({super.key, required this.session});
+  const PairingScreen({
+    super.key,
+    required this.session,
+    this.initialPayload,
+  });
 
   final AppSession session;
+
+  /// Pre-filled payload from a deep link (if the app was opened via QR scan).
+  final PairingPayload? initialPayload;
 
   @override
   State<PairingScreen> createState() => _PairingScreenState();
@@ -27,6 +35,24 @@ class _PairingScreenState extends State<PairingScreen> {
   bool _busy = false;
   bool _useServer = true;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _payload = widget.initialPayload;
+  }
+
+  @override
+  void didUpdateWidget(covariant PairingScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialPayload != null &&
+        widget.initialPayload != oldWidget.initialPayload) {
+      setState(() {
+        _payload = widget.initialPayload;
+        _error = null;
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -86,7 +112,7 @@ class _PairingScreenState extends State<PairingScreen> {
                 autofocus: true,
                 decoration: const InputDecoration(
                   labelText: 'Pairing URL',
-                  hintText: 'liftelligence://pair?host=...&port=...&token=...',
+                  hintText: 'liftelligence://pair?nfc_id=...&token=...',
                 ),
               ),
               const SizedBox(height: 12),
@@ -134,8 +160,6 @@ class _PairingScreenState extends State<PairingScreen> {
 
     if (_useServer) {
       final resp = await const NfcLoginServerClient().pair(
-        host: payload.host,
-        port: payload.port,
         token: payload.token,
         first: first,
         last: last,
@@ -179,6 +203,15 @@ class _PairingScreenState extends State<PairingScreen> {
     );
   }
 
+  /// Accept a payload pushed from outside (e.g. deep link arriving while
+  /// already on this screen).
+  void applyPayload(PairingPayload payload) {
+    setState(() {
+      _payload = payload;
+      _error = null;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -216,7 +249,9 @@ class _PairingScreenState extends State<PairingScreen> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'When a bench sees an unknown NFC card, it shows a QR code. Scan it here to link your account.',
+                    'When a bench sees an unknown NFC card, it shows a QR code. '
+                    'Scan it with your phone camera to link the card to your account, '
+                    'or use the scanner below.',
                     style: TextStyle(
                       color: scheme.onSurface.withValues(alpha: 0.72),
                       height: 1.35,
@@ -245,8 +280,7 @@ class _PairingScreenState extends State<PairingScreen> {
                             : () {
                                 setState(() {
                                   _payload = const PairingPayload(
-                                    host: '127.0.0.1',
-                                    port: 5001,
+                                    nfcId: 'DEMO_NFC_ID',
                                     token: 'DEMO_TOKEN',
                                   );
                                   _error = null;
@@ -257,6 +291,13 @@ class _PairingScreenState extends State<PairingScreen> {
                     ],
                   ),
                   const SizedBox(height: 6),
+                  Text(
+                    'Server: $kDefaultServerHost:$kDefaultServerPort',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurface.withValues(alpha: 0.55),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
                   Text(
                     'Signed in as ${widget.session.email}',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -271,7 +312,8 @@ class _PairingScreenState extends State<PairingScreen> {
               const _EmptyState(
                 title: 'Ready to scan',
                 subtitle:
-                    'Tap Scan QR code when the bench shows its pairing screen.',
+                    'Tap Scan QR code when the bench shows its pairing screen, '
+                    'or scan the QR code with your phone camera.',
                 icon: Icons.qr_code_rounded,
               ),
             ] else ...[
@@ -283,10 +325,10 @@ class _PairingScreenState extends State<PairingScreen> {
                   children: [
                     Row(
                       children: [
-                        Icon(Icons.dns_rounded, color: scheme.primary),
+                        Icon(Icons.nfc_rounded, color: scheme.primary),
                         const SizedBox(width: 10),
                         Text(
-                          'Bench server',
+                          'NFC Card',
                           style: Theme.of(context).textTheme.titleMedium
                               ?.copyWith(fontWeight: FontWeight.w800),
                         ),
@@ -294,9 +336,10 @@ class _PairingScreenState extends State<PairingScreen> {
                     ),
                     const SizedBox(height: 10),
                     Text(
-                      '${payload.host}:${payload.port}',
+                      'Card ID: ${payload.nfcId.toUpperCase()}',
                       style: Theme.of(context).textTheme.titleSmall?.copyWith(
                         fontWeight: FontWeight.w700,
+                        fontFamily: 'monospace',
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -357,7 +400,7 @@ class _PairingScreenState extends State<PairingScreen> {
                             title: const Text('Pair using server'),
                             subtitle: Text(
                               _useServer
-                                  ? 'Sends the pairing token to nfc-login-server.'
+                                  ? 'Sends the pairing token to the configured server.'
                                   : 'Saves pairing locally (demo mode).',
                               style: TextStyle(
                                 color: scheme.onSurface.withValues(alpha: 0.72),
@@ -391,7 +434,7 @@ class _PairingScreenState extends State<PairingScreen> {
                                       ),
                                     )
                                   : const Text(
-                                      'Pair',
+                                      'Link NFC Card',
                                       key: ValueKey('idle'),
                                       style: TextStyle(
                                         fontWeight: FontWeight.w800,
@@ -417,7 +460,8 @@ class _PairingScreenState extends State<PairingScreen> {
                 ),
                 title: const Text('What happens next?'),
                 subtitle: const Text(
-                  'After pairing, tap your NFC card on the bench again. The bench will recognize you and load your session.',
+                  'After linking, tap your NFC card on the bench again. '
+                  'The bench will recognize you and load your session.',
                   style: TextStyle(height: 1.35),
                 ),
                 isThreeLine: true,
