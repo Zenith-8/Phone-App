@@ -130,6 +130,7 @@ class _AppRootState extends State<AppRoot> {
         onResetPairing: () => session.resetPairing(),
         onResetApp: () => session.resetApp(),
         userEmail: session.email,
+        pairedUid: session.pairedUid,
         pairingPayload: session.pairingPayload,
         pairedOffline: session.pairedOffline,
         themeMode: session.themeMode,

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../config/server_config.dart';
+import '../models/workout.dart';
 
 class PairResponse {
   const PairResponse({
@@ -70,48 +71,107 @@ class NfcLoginServerClient {
     }
   }
 
-  static Future<Uint8List> _readFrame(Socket socket, {required Duration timeout}) async {
-    final header = await _readExact(socket, 4, timeout: timeout);
-    final len = ByteData.sublistView(header).getUint32(0, Endian.big);
-    if (len == 0 || len > 1024 * 1024) {
-      throw const FormatException('invalid length');
+  /// Fetches workout history for the given NFC UID from the server.
+  Future<List<Workout>> getWorkouts({
+    String host = kDefaultServerHost,
+    int port = kDefaultServerPort,
+    required String uid,
+    Duration timeout = const Duration(seconds: 6),
+  }) async {
+    final socket = await Socket.connect(host, port, timeout: timeout);
+    try {
+      socket.setOption(SocketOption.tcpNoDelay, true);
+
+      final req = <String, Object?>{
+        'type': 'get_workouts',
+        'uid': uid,
+      };
+      final jsonBytes = utf8.encode(jsonEncode(req));
+      final header = ByteData(4)..setUint32(0, jsonBytes.length, Endian.big);
+      socket.add(header.buffer.asUint8List());
+      socket.add(jsonBytes);
+      await socket.flush();
+
+      final respBytes = await _readFrame(socket, timeout: timeout);
+      final decoded = jsonDecode(utf8.decode(respBytes));
+      if (decoded is! Map) return [];
+
+      final ok = decoded['ok'] == true;
+      if (!ok) return [];
+
+      final rawList = decoded['workouts'];
+      if (rawList is! List) return [];
+
+      return rawList
+          .whereType<Map<String, dynamic>>()
+          .map(Workout.fromServerJson)
+          .toList();
+    } on TimeoutException {
+      return [];
+    } on SocketException catch (_) {
+      return [];
+    } on FormatException catch (_) {
+      return [];
+    } finally {
+      socket.destroy();
     }
-    return _readExact(socket, len, timeout: timeout);
   }
 
-  static Future<Uint8List> _readExact(Socket socket, int length, {required Duration timeout}) async {
+  /// Reads one length-prefixed frame using a single stream subscription so
+  /// that data arriving in a single TCP segment isn't lost between reads.
+  static Future<Uint8List> _readFrame(Socket socket, {required Duration timeout}) async {
     final completer = Completer<Uint8List>();
     final buffer = BytesBuilder(copy: false);
+    int? payloadLen;
     late final StreamSubscription<List<int>> sub;
 
-    void finish() {
+    void tryComplete() {
       if (completer.isCompleted) return;
-      completer.complete(buffer.takeBytes());
-      sub.cancel();
-    }
 
-    void fail(Object err) {
-      if (completer.isCompleted) return;
-      completer.completeError(err);
-      sub.cancel();
+      // Phase 1: need at least 4 bytes for the length header.
+      if (payloadLen == null) {
+        if (buffer.length < 4) return;
+        final all = buffer.takeBytes();
+        payloadLen = ByteData.sublistView(Uint8List.fromList(all)).getUint32(0, Endian.big);
+        if (payloadLen! <= 0 || payloadLen! > 1024 * 1024) {
+          completer.completeError(const FormatException('invalid length'));
+          sub.cancel();
+          return;
+        }
+        // Put remaining bytes back.
+        if (all.length > 4) {
+          buffer.add(all.sublist(4));
+        }
+      }
+
+      // Phase 2: need payloadLen bytes of actual data.
+      if (buffer.length >= payloadLen!) {
+        final all = buffer.takeBytes();
+        completer.complete(Uint8List.sublistView(Uint8List.fromList(all), 0, payloadLen!));
+        sub.cancel();
+      }
     }
 
     sub = socket.listen(
       (chunk) {
         buffer.add(chunk);
-        if (buffer.length >= length) {
-          final bytes = buffer.takeBytes();
-          final out = Uint8List.sublistView(bytes, 0, length);
-          if (!completer.isCompleted) {
-            completer.complete(out);
-          }
-          sub.cancel();
-        }
+        tryComplete();
       },
-      onError: fail,
-      onDone: finish,
+      onError: (Object err) {
+        if (!completer.isCompleted) completer.completeError(err);
+        sub.cancel();
+      },
+      onDone: () {
+        if (!completer.isCompleted) {
+          completer.completeError(const SocketException('connection closed'));
+        }
+        sub.cancel();
+      },
       cancelOnError: true,
     );
+
+    // Kick in case bytes were already buffered before we subscribed.
+    tryComplete();
 
     return completer.future.timeout(timeout, onTimeout: () {
       sub.cancel();

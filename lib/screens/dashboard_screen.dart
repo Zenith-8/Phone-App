@@ -2,8 +2,8 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-import '../data/mock_workouts.dart';
 import '../models/workout.dart';
+import '../services/nfc_login_server_client.dart';
 import '../services/pairing_payload.dart';
 import '../utils/workout_stats.dart';
 import '../widgets/app_background.dart';
@@ -20,6 +20,7 @@ class DashboardScreen extends StatefulWidget {
     required this.onResetPairing,
     required this.onResetApp,
     required this.userEmail,
+    this.pairedUid,
     required this.pairingPayload,
     required this.pairedOffline,
     required this.themeMode,
@@ -30,6 +31,7 @@ class DashboardScreen extends StatefulWidget {
   final VoidCallback onResetPairing;
   final VoidCallback onResetApp;
   final String userEmail;
+  final String? pairedUid;
   final PairingPayload? pairingPayload;
   final bool pairedOffline;
   final ThemeMode themeMode;
@@ -40,14 +42,16 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  late List<Workout> _workouts;
+  List<Workout> _workouts = [];
   int _index = 0;
   bool _refreshing = false;
+  bool _loading = true;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    _workouts = List<Workout>.from(mockWorkouts());
+    _fetchWorkouts();
   }
 
   String get _displayName {
@@ -65,14 +69,42 @@ class _DashboardScreenState extends State<DashboardScreen> {
         .join(' ');
   }
 
-  Future<void> _simulateRefresh() async {
+  Future<void> _fetchWorkouts() async {
+    final uid = widget.pairedUid;
+    if (uid == null || uid.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _workouts = [];
+        _loading = false;
+        _refreshing = false;
+        _error = null;
+      });
+      return;
+    }
+
+    try {
+      final workouts = await const NfcLoginServerClient().getWorkouts(uid: uid);
+      if (!mounted) return;
+      setState(() {
+        _workouts = workouts;
+        _loading = false;
+        _refreshing = false;
+        _error = null;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _refreshing = false;
+        _error = 'Could not reach server.';
+      });
+    }
+  }
+
+  Future<void> _refresh() async {
     setState(() => _refreshing = true);
-    await Future<void>.delayed(const Duration(milliseconds: 700));
+    await _fetchWorkouts();
     if (!mounted) return;
-    setState(() {
-      _workouts = List<Workout>.from(mockWorkouts());
-      _refreshing = false;
-    });
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('Workouts refreshed')));
@@ -219,8 +251,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
               : _WorkoutsPanel(
                   key: const ValueKey('workouts'),
                   workouts: _workouts,
+                  loading: _loading,
+                  error: _error,
                   refreshing: _refreshing,
-                  onRefresh: _simulateRefresh,
+                  onRefresh: _refresh,
                   onOpenWorkout: _openWorkout,
                 ),
         ),
@@ -404,12 +438,16 @@ class _WorkoutsPanel extends StatefulWidget {
   const _WorkoutsPanel({
     super.key,
     required this.workouts,
+    required this.loading,
+    this.error,
     required this.refreshing,
     required this.onRefresh,
     required this.onOpenWorkout,
   });
 
   final List<Workout> workouts;
+  final bool loading;
+  final String? error;
   final bool refreshing;
   final Future<void> Function() onRefresh;
   final void Function(Workout workout) onOpenWorkout;
@@ -493,12 +531,32 @@ class _WorkoutsPanelState extends State<_WorkoutsPanel> {
         Expanded(
           child: RefreshIndicator(
             onRefresh: widget.onRefresh,
-            child: visible.isEmpty
+            child: widget.loading
+                ? const Center(child: CircularProgressIndicator())
+                : widget.error != null && visible.isEmpty
+                ? ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: [
+                      const SizedBox(height: 120),
+                      Center(
+                        child: Column(
+                          children: [
+                            Icon(Icons.cloud_off_rounded, size: 40, color: scheme.outline),
+                            const SizedBox(height: 8),
+                            Text(widget.error!, style: TextStyle(color: scheme.outline)),
+                            const SizedBox(height: 8),
+                            TextButton(onPressed: widget.onRefresh, child: const Text('Retry')),
+                          ],
+                        ),
+                      ),
+                    ],
+                  )
+                : visible.isEmpty
                 ? ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     children: const [
                       SizedBox(height: 120),
-                      Center(child: Text('No workouts found')),
+                      Center(child: Text('No workouts yet. Complete a session on the bench!')),
                     ],
                   )
                 : ListView.separated(
