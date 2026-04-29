@@ -71,11 +71,24 @@ class _PairingScreenState extends State<PairingScreen> {
 
     final first = _firstCtrl.text.trim();
     final last = _lastCtrl.text.trim();
-    final resp = await const NfcLoginServerClient().pair(
-      token: parsed.token,
-      first: first,
-      last: last,
-    );
+
+    PairResponse? resp;
+    try {
+      resp = await const NfcLoginServerClient().pair(
+        token: parsed.token,
+        first: first,
+        last: last,
+      );
+    } catch (e) {
+      // The client itself catches the common failure modes, but defend
+      // against any unexpected throw so the spinner can't get stuck.
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = 'Network error: $e';
+      });
+      return;
+    }
     if (!mounted) return;
     if (!resp.ok) {
       setState(() {

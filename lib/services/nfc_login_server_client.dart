@@ -34,8 +34,9 @@ class NfcLoginServerClient {
     required String last,
     Duration timeout = const Duration(seconds: 4),
   }) async {
-    final socket = await Socket.connect(host, port, timeout: timeout);
+    Socket? socket;
     try {
+      socket = await Socket.connect(host, port, timeout: timeout);
       socket.setOption(SocketOption.tcpNoDelay, true);
 
       final req = <String, Object?>{
@@ -63,11 +64,20 @@ class NfcLoginServerClient {
     } on TimeoutException {
       return const PairResponse(ok: false, error: 'timeout');
     } on SocketException catch (_) {
+      // Covers: connect-time DNS errors, TCP timeouts (Socket.connect's own
+      // timeout throws SocketException, NOT TimeoutException), connection
+      // refused, broken pipe mid-send, etc. Any of these used to escape the
+      // catch when Socket.connect lived above the try block, leaving the
+      // caller's spinner stuck on forever.
       return const PairResponse(ok: false, error: 'network_error');
     } on FormatException catch (_) {
       return const PairResponse(ok: false, error: 'invalid_json');
+    } catch (_) {
+      // Last-resort safety net so the UI never hangs on an unexpected
+      // exception type. Reported as a generic error.
+      return const PairResponse(ok: false, error: 'network_error');
     } finally {
-      socket.destroy();
+      socket?.destroy();
     }
   }
 
@@ -78,8 +88,9 @@ class NfcLoginServerClient {
     required String uid,
     Duration timeout = const Duration(seconds: 6),
   }) async {
-    final socket = await Socket.connect(host, port, timeout: timeout);
+    Socket? socket;
     try {
+      socket = await Socket.connect(host, port, timeout: timeout);
       socket.setOption(SocketOption.tcpNoDelay, true);
 
       final req = <String, Object?>{
@@ -112,8 +123,10 @@ class NfcLoginServerClient {
       return [];
     } on FormatException catch (_) {
       return [];
+    } catch (_) {
+      return [];
     } finally {
-      socket.destroy();
+      socket?.destroy();
     }
   }
 
