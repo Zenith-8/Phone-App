@@ -118,7 +118,7 @@ class _PairingSuccessScreenState extends State<PairingSuccessScreen>
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'NFC Card: ${widget.payload.nfcId.toUpperCase()}',
+                      'Code: ${widget.payload.pretty()}',
                       style: TextStyle(
                         color: scheme.onSurface.withValues(alpha: 0.72),
                         fontFamily: 'monospace',
@@ -128,9 +128,10 @@ class _PairingSuccessScreenState extends State<PairingSuccessScreen>
                     if (widget.pairedUid != null) ...[
                       const SizedBox(height: 6),
                       Text(
-                        'UID: ${widget.pairedUid}',
+                        'NFC UID: ${widget.pairedUid}',
                         style: TextStyle(
                           color: scheme.onSurface.withValues(alpha: 0.72),
+                          fontFamily: 'monospace',
                         ),
                         textAlign: TextAlign.center,
                       ),

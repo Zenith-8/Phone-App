@@ -1,5 +1,6 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../config/server_config.dart';
 import '../../services/app_session.dart';
@@ -7,9 +8,11 @@ import '../../services/nfc_login_server_client.dart';
 import '../../services/pairing_payload.dart';
 import '../../widgets/app_background.dart';
 import '../../widgets/frosted_panel.dart';
-import 'pairing_scan_screen.dart';
 import 'pairing_success_screen.dart';
 
+/// First-time setup screen. The bench shows a 6-digit code on its display
+/// when it sees an unknown NFC card; the user types that code in here along
+/// with their name to register the card with their account.
 class PairingScreen extends StatefulWidget {
   const PairingScreen({
     super.key,
@@ -19,7 +22,9 @@ class PairingScreen extends StatefulWidget {
 
   final AppSession session;
 
-  /// Pre-filled payload from a deep link (if the app was opened via QR scan).
+  /// Pre-filled payload (e.g. a previously cached partial pairing). The
+  /// camera/QR / deep-link flow has been retired; this is left in place so
+  /// callers that already pass a value don't need to be updated.
   final PairingPayload? initialPayload;
 
   @override
@@ -27,156 +32,60 @@ class PairingScreen extends StatefulWidget {
 }
 
 class _PairingScreenState extends State<PairingScreen> {
-  final _first = TextEditingController();
-  final _last = TextEditingController();
+  final _codeCtrl = TextEditingController();
+  final _firstCtrl = TextEditingController();
+  final _lastCtrl = TextEditingController();
   final _formKey = GlobalKey<FormState>();
 
-  PairingPayload? _payload;
   bool _busy = false;
-  bool _useServer = true;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    _payload = widget.initialPayload;
-  }
-
-  @override
-  void didUpdateWidget(covariant PairingScreen oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.initialPayload != null &&
-        widget.initialPayload != oldWidget.initialPayload) {
-      setState(() {
-        _payload = widget.initialPayload;
-        _error = null;
-      });
+    if (widget.initialPayload != null) {
+      _codeCtrl.text = widget.initialPayload!.token;
     }
   }
 
   @override
   void dispose() {
-    _first.dispose();
-    _last.dispose();
+    _codeCtrl.dispose();
+    _firstCtrl.dispose();
+    _lastCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _scan() async {
-    final payload = await Navigator.of(
-      context,
-    ).push<PairingPayload?>(PairingScanScreen.route());
-    if (!mounted || payload == null) return;
-    setState(() {
-      _payload = payload;
-      _error = null;
-    });
-  }
-
-  Future<void> _enterCode() async {
-    final controller = TextEditingController();
-    final scheme = Theme.of(context).colorScheme;
-    final payload = await showModalBottomSheet<PairingPayload?>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (context) {
-        return Padding(
-          padding: EdgeInsets.fromLTRB(
-            16,
-            0,
-            16,
-            MediaQuery.viewInsetsOf(context).bottom + 16,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'Enter pairing code',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Paste the QR contents (starts with `liftelligence://pair`).',
-                style: TextStyle(
-                  color: scheme.onSurface.withValues(alpha: 0.72),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: controller,
-                minLines: 2,
-                maxLines: 5,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  labelText: 'Pairing URL',
-                  hintText: 'liftelligence://pair?nfc_id=...&token=...',
-                ),
-              ),
-              const SizedBox(height: 12),
-              FilledButton(
-                onPressed: () {
-                  final parsed = PairingPayload.tryParse(controller.text);
-                  Navigator.of(context).pop(parsed);
-                },
-                child: const Text('Use code'),
-              ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        );
-      },
-    );
-    controller.dispose();
-    if (!mounted) return;
-    if (payload == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Not a valid pairing code.')),
-      );
+  Future<void> _submit() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    final parsed = PairingPayload.tryParse(_codeCtrl.text);
+    if (parsed == null) {
+      setState(() => _error = 'Code must be 4-12 digits.');
       return;
     }
-    setState(() {
-      _payload = payload;
-      _error = null;
-    });
-  }
-
-  Future<void> _pair() async {
-    if (_payload == null) return;
-    if (!(_formKey.currentState?.validate() ?? false)) return;
 
     setState(() {
       _busy = true;
       _error = null;
     });
 
-    final payload = _payload!;
-    final first = _first.text.trim();
-    final last = _last.text.trim();
-    String? uid;
-    var offline = !_useServer;
-
-    if (_useServer) {
-      final resp = await const NfcLoginServerClient().pair(
-        token: payload.token,
-        first: first,
-        last: last,
-      );
-      if (!mounted) return;
-      if (!resp.ok) {
-        setState(() {
-          _busy = false;
-          _error = 'Pairing failed: ${resp.error ?? 'unknown_error'}';
-        });
-        return;
-      }
-      uid = resp.uid;
-      offline = false;
+    final first = _firstCtrl.text.trim();
+    final last = _lastCtrl.text.trim();
+    final resp = await const NfcLoginServerClient().pair(
+      token: parsed.token,
+      first: first,
+      last: last,
+    );
+    if (!mounted) return;
+    if (!resp.ok) {
+      setState(() {
+        _busy = false;
+        _error = _friendlyError(resp.error);
+      });
+      return;
     }
 
-    if (!mounted) return;
+    final uid = resp.uid;
     setState(() => _busy = false);
 
     final platform = Theme.of(context).platform;
@@ -187,27 +96,46 @@ class _PairingScreenState extends State<PairingScreen> {
           ? CupertinoPageRoute<void>(
               builder: (_) => PairingSuccessScreen(
                 session: widget.session,
-                payload: payload,
+                payload: parsed,
                 pairedUid: uid,
-                offline: offline,
+                offline: false,
               ),
             )
           : MaterialPageRoute<void>(
               builder: (_) => PairingSuccessScreen(
                 session: widget.session,
-                payload: payload,
+                payload: parsed,
                 pairedUid: uid,
-                offline: offline,
+                offline: false,
               ),
             ),
     );
   }
 
-  /// Accept a payload pushed from outside (e.g. deep link arriving while
-  /// already on this screen).
+  String _friendlyError(String? raw) {
+    switch (raw) {
+      case null:
+      case '':
+        return 'Pairing failed. Please try again.';
+      case 'token_expired':
+        return 'That code has expired. Tap your card on the bench again to get a new one.';
+      case 'token_unknown':
+      case 'pair_failed':
+        return 'Code not recognized. Double-check the digits on the bench display.';
+      case 'timeout':
+        return 'Server didn\'t respond in time. Check your network and retry.';
+      case 'network_error':
+        return 'Couldn\'t reach the server.';
+      default:
+        return 'Pairing failed: $raw';
+    }
+  }
+
+  /// Accept a payload pushed from outside (e.g. session restore).
   void applyPayload(PairingPayload payload) {
+    if (!mounted) return;
     setState(() {
-      _payload = payload;
+      _codeCtrl.text = payload.token;
       _error = null;
     });
   }
@@ -215,7 +143,6 @@ class _PairingScreenState extends State<PairingScreen> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final payload = _payload;
 
     return Scaffold(
       appBar: AppBar(
@@ -232,292 +159,163 @@ class _PairingScreenState extends State<PairingScreen> {
         ],
       ),
       body: AppBackground(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
-          children: [
-            FrostedPanel(
-              borderRadius: BorderRadius.circular(28),
-              padding: const EdgeInsets.all(18),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'First-time setup',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'When a bench sees an unknown NFC card, it shows a QR code. '
-                    'Scan it with your phone camera to link the card to your account, '
-                    'or use the scanner below.',
-                    style: TextStyle(
-                      color: scheme.onSurface.withValues(alpha: 0.72),
-                      height: 1.35,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  FilledButton.icon(
-                    onPressed: _busy ? null : _scan,
-                    icon: const Icon(Icons.qr_code_scanner_rounded),
-                    label: Text(
-                      payload == null ? 'Scan QR code' : 'Scan again',
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      TextButton.icon(
-                        onPressed: _busy ? null : _enterCode,
-                        icon: const Icon(Icons.keyboard_rounded),
-                        label: const Text('Enter code'),
-                      ),
-                      const Spacer(),
-                      TextButton(
-                        onPressed: _busy
-                            ? null
-                            : () {
-                                setState(() {
-                                  _payload = const PairingPayload(
-                                    nfcId: 'DEMO_NFC_ID',
-                                    token: 'DEMO_TOKEN',
-                                  );
-                                  _error = null;
-                                });
-                              },
-                        child: const Text('Use demo'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Server: $kDefaultServerHost:$kDefaultServerPort',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurface.withValues(alpha: 0.55),
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    'Signed in as ${widget.session.email}',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurface.withValues(alpha: 0.68),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-            if (payload == null) ...[
-              const _EmptyState(
-                title: 'Ready to scan',
-                subtitle:
-                    'Tap Scan QR code when the bench shows its pairing screen, '
-                    'or scan the QR code with your phone camera.',
-                icon: Icons.qr_code_rounded,
-              ),
-            ] else ...[
+        child: Form(
+          key: _formKey,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
+            children: [
               FrostedPanel(
-                borderRadius: BorderRadius.circular(24),
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+                borderRadius: BorderRadius.circular(28),
+                padding: const EdgeInsets.all(18),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    Text(
+                      'First-time setup',
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Tap your NFC card on the bench. The bench will show a '
+                      '6-digit code. Type that code below along with your '
+                      'name to link the card to your account.',
+                      style: TextStyle(
+                        color: scheme.onSurface.withValues(alpha: 0.72),
+                        height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _codeCtrl,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.digitsOnly,
+                        LengthLimitingTextInputFormatter(12),
+                      ],
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 28,
+                        letterSpacing: 6,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      textAlign: TextAlign.center,
+                      decoration: const InputDecoration(
+                        labelText: 'Pairing code',
+                        hintText: '------',
+                        counterText: '',
+                      ),
+                      validator: (v) {
+                        final s = (v ?? '').trim();
+                        if (s.isEmpty) return 'Enter the code shown on the bench.';
+                        if (PairingPayload.tryParse(s) == null) {
+                          return 'Code must be digits only.';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 14),
                     Row(
                       children: [
-                        Icon(Icons.nfc_rounded, color: scheme.primary),
-                        const SizedBox(width: 10),
-                        Text(
-                          'NFC Card',
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w800),
+                        Expanded(
+                          child: TextFormField(
+                            controller: _firstCtrl,
+                            textInputAction: TextInputAction.next,
+                            autofillHints: const [AutofillHints.givenName],
+                            decoration: const InputDecoration(
+                              labelText: 'First name',
+                            ),
+                            validator: (v) =>
+                                (v == null || v.trim().isEmpty)
+                                ? 'Required'
+                                : null,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: TextFormField(
+                            controller: _lastCtrl,
+                            textInputAction: TextInputAction.done,
+                            autofillHints: const [AutofillHints.familyName],
+                            decoration: const InputDecoration(
+                              labelText: 'Last name',
+                            ),
+                            validator: (v) =>
+                                (v == null || v.trim().isEmpty)
+                                ? 'Required'
+                                : null,
+                          ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 10),
-                    Text(
-                      'Card ID: ${payload.nfcId.toUpperCase()}',
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                        fontFamily: 'monospace',
+                    if (_error != null) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        _error!,
+                        style: TextStyle(
+                          color: scheme.error,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    FilledButton(
+                      onPressed: _busy ? null : _submit,
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 200),
+                        child: _busy
+                            ? SizedBox(
+                                key: const ValueKey('busy'),
+                                height: 22,
+                                width: 22,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.5,
+                                  color: scheme.onPrimary,
+                                ),
+                              )
+                            : const Text(
+                                'Link NFC Card',
+                                key: ValueKey('idle'),
+                                style: TextStyle(fontWeight: FontWeight.w800),
+                              ),
                       ),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 8),
                     Text(
-                      'Token: ${payload.maskedToken()}',
-                      style: TextStyle(
-                        color: scheme.onSurface.withValues(alpha: 0.72),
+                      'Server: $kDefaultServerHost:$kDefaultServerPort',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurface.withValues(alpha: 0.55),
                       ),
                     ),
-                    const SizedBox(height: 14),
-                    Form(
-                      key: _formKey,
-                      child: Column(
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextFormField(
-                                  controller: _first,
-                                  textInputAction: TextInputAction.next,
-                                  autofillHints: const [
-                                    AutofillHints.givenName,
-                                  ],
-                                  decoration: const InputDecoration(
-                                    labelText: 'First name',
-                                  ),
-                                  validator: (v) =>
-                                      (v == null || v.trim().isEmpty)
-                                      ? 'Required'
-                                      : null,
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: TextFormField(
-                                  controller: _last,
-                                  textInputAction: TextInputAction.done,
-                                  autofillHints: const [
-                                    AutofillHints.familyName,
-                                  ],
-                                  decoration: const InputDecoration(
-                                    labelText: 'Last name',
-                                  ),
-                                  validator: (v) =>
-                                      (v == null || v.trim().isEmpty)
-                                      ? 'Required'
-                                      : null,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          SwitchListTile.adaptive(
-                            value: _useServer,
-                            onChanged: _busy
-                                ? null
-                                : (v) => setState(() => _useServer = v),
-                            title: const Text('Pair using server'),
-                            subtitle: Text(
-                              _useServer
-                                  ? 'Sends the pairing token to the configured server.'
-                                  : 'Saves pairing locally (demo mode).',
-                              style: TextStyle(
-                                color: scheme.onSurface.withValues(alpha: 0.72),
-                              ),
-                            ),
-                            contentPadding: EdgeInsets.zero,
-                          ),
-                          if (_error != null) ...[
-                            const SizedBox(height: 6),
-                            Text(
-                              _error!,
-                              style: TextStyle(
-                                color: scheme.error,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 12),
-                          FilledButton(
-                            onPressed: _busy ? null : _pair,
-                            child: AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 200),
-                              child: _busy
-                                  ? SizedBox(
-                                      key: const ValueKey('busy'),
-                                      height: 22,
-                                      width: 22,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2.5,
-                                        color: scheme.onPrimary,
-                                      ),
-                                    )
-                                  : const Text(
-                                      'Link NFC Card',
-                                      key: ValueKey('idle'),
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                    ),
-                            ),
-                          ),
-                        ],
+                    Text(
+                      'Signed in as ${widget.session.email}',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurface.withValues(alpha: 0.68),
                       ),
                     ),
                   ],
                 ),
               ),
-            ],
-            const SizedBox(height: 14),
-            FrostedPanel(
-              borderRadius: BorderRadius.circular(22),
-              padding: EdgeInsets.zero,
-              child: ListTile(
-                leading: Icon(
-                  Icons.info_outline_rounded,
-                  color: scheme.primary,
+              const SizedBox(height: 14),
+              FrostedPanel(
+                borderRadius: BorderRadius.circular(22),
+                padding: EdgeInsets.zero,
+                child: ListTile(
+                  leading: Icon(Icons.info_outline_rounded,
+                      color: scheme.primary),
+                  title: const Text('What happens next?'),
+                  subtitle: const Text(
+                    'After linking, tap your NFC card on the bench again. '
+                    'The bench will recognize you and load your session.',
+                    style: TextStyle(height: 1.35),
+                  ),
+                  isThreeLine: true,
                 ),
-                title: const Text('What happens next?'),
-                subtitle: const Text(
-                  'After linking, tap your NFC card on the bench again. '
-                  'The bench will recognize you and load your session.',
-                  style: TextStyle(height: 1.35),
-                ),
-                isThreeLine: true,
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
-    );
-  }
-}
-
-class _EmptyState extends StatelessWidget {
-  const _EmptyState({
-    required this.title,
-    required this.subtitle,
-    required this.icon,
-  });
-
-  final String title;
-  final String subtitle;
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return FrostedPanel(
-      borderRadius: BorderRadius.circular(24),
-      padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 14),
-      child: Column(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: scheme.secondaryContainer.withValues(alpha: 0.68),
-              borderRadius: BorderRadius.circular(22),
-            ),
-            child: Icon(icon, size: 34, color: scheme.onSecondaryContainer),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            title,
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            subtitle,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: scheme.onSurface.withValues(alpha: 0.72),
-              height: 1.35,
-            ),
-          ),
-        ],
       ),
     );
   }

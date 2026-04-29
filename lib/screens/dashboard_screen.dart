@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -5,6 +7,7 @@ import 'package:intl/intl.dart';
 import '../models/workout.dart';
 import '../services/nfc_login_server_client.dart';
 import '../services/pairing_payload.dart';
+import '../services/rep_live_service.dart';
 import '../utils/workout_stats.dart';
 import '../widgets/app_background.dart';
 import '../widgets/frosted_panel.dart';
@@ -47,11 +50,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _refreshing = false;
   bool _loading = true;
   String? _error;
+  late final RepLiveService _liveReps;
 
   @override
   void initState() {
     super.initState();
+    _liveReps = RepLiveService();
+    final uid = widget.pairedUid;
+    if (uid != null && uid.isNotEmpty) {
+      unawaited(_liveReps.start(uid));
+    }
     _fetchWorkouts();
+  }
+
+  @override
+  void didUpdateWidget(covariant DashboardScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final uid = widget.pairedUid;
+    if (uid != oldWidget.pairedUid) {
+      if (uid != null && uid.isNotEmpty) {
+        unawaited(_liveReps.start(uid));
+      } else {
+        unawaited(_liveReps.stop());
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _liveReps.dispose();
+    super.dispose();
   }
 
   String get _displayName {
@@ -247,6 +275,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   pairingPayload: widget.pairingPayload,
                   pairedOffline: widget.pairedOffline,
                   onSimulateFirstSignIn: _confirmResetPairing,
+                  liveReps: _liveReps,
                 )
               : _WorkoutsPanel(
                   key: const ValueKey('workouts'),
@@ -301,6 +330,7 @@ class _HomePanel extends StatelessWidget {
     required this.pairingPayload,
     required this.pairedOffline,
     required this.onSimulateFirstSignIn,
+    required this.liveReps,
   });
 
   final String displayName;
@@ -310,12 +340,15 @@ class _HomePanel extends StatelessWidget {
   final PairingPayload? pairingPayload;
   final bool pairedOffline;
   final VoidCallback onSimulateFirstSignIn;
+  final RepLiveService liveReps;
 
   @override
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 102),
       children: [
+        _LiveRepsCard(liveReps: liveReps, colorScheme: colorScheme),
+        const SizedBox(height: 14),
         FrostedPanel(
           borderRadius: BorderRadius.circular(24),
           padding: const EdgeInsets.all(16),
@@ -412,8 +445,8 @@ class _HomePanel extends StatelessWidget {
                 title: const Text('Bench link'),
                 subtitle: Text(
                   pairingPayload == null
-                      ? 'No payload saved yet.'
-                      : 'NFC ${pairingPayload!.maskedNfcId()} - token ${pairingPayload!.maskedToken()}',
+                      ? 'No pairing on file yet.'
+                      : 'Pairing code ${pairingPayload!.pretty()}',
                 ),
                 trailing: pairedOffline
                     ? const Chip(label: Text('Demo'))
@@ -602,6 +635,132 @@ class _WorkoutsPanelState extends State<_WorkoutsPanel> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Live rep counter sourced from the persistent connection to the
+/// nfc-login-server. Updates in real-time as the Pi detects each rep, and
+/// implicitly drives the rep_ack the timing measurement depends on.
+class _LiveRepsCard extends StatelessWidget {
+  const _LiveRepsCard({required this.liveReps, required this.colorScheme});
+
+  final RepLiveService liveReps;
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: liveReps,
+      builder: (context, _) {
+        final connected = liveReps.isConnected;
+        final repCount = liveReps.repCount;
+        final last = liveReps.lastEvent;
+        final hasReps = last != null && repCount > 0;
+
+        return FrostedPanel(
+          borderRadius: BorderRadius.circular(24),
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: hasReps
+                      ? colorScheme.primary.withValues(alpha: 0.15)
+                      : colorScheme.surfaceContainerHighest,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  hasReps
+                      ? Icons.fitness_center
+                      : connected
+                          ? Icons.sensors
+                          : Icons.sensors_off,
+                  color: hasReps
+                      ? colorScheme.primary
+                      : colorScheme.onSurfaceVariant,
+                  size: 28,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'Live reps',
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(width: 8),
+                        _ConnectionDot(connected: connected),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      hasReps
+                          ? '${last.machine.isEmpty ? 'machine' : last.machine} - rep #${last.repId}'
+                          : connected
+                              ? 'Waiting for next rep...'
+                              : 'Reconnecting to server...',
+                      style: TextStyle(
+                        color: colorScheme.onSurface.withValues(alpha: 0.65),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 220),
+                child: Text(
+                  '$repCount',
+                  key: ValueKey<int>(repCount),
+                  style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: hasReps
+                            ? colorScheme.primary
+                            : colorScheme.onSurface.withValues(alpha: 0.5),
+                      ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ConnectionDot extends StatelessWidget {
+  const _ConnectionDot({required this.connected});
+
+  final bool connected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 8,
+      height: 8,
+      decoration: BoxDecoration(
+        color: connected ? Colors.greenAccent.shade400 : Colors.redAccent,
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color:
+                (connected ? Colors.greenAccent : Colors.redAccent).withValues(
+              alpha: 0.5,
+            ),
+            blurRadius: 4,
+          ),
+        ],
+      ),
     );
   }
 }

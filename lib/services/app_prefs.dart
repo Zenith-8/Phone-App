@@ -109,20 +109,20 @@ abstract final class AppPrefs {
 
   static Future<PairingPayload?> loadPairingPayload() async {
     final p = await SharedPreferences.getInstance();
-    final nfcId = p.getString(_pairNfcIdKey);
     final token = p.getString(_pairTokenKey);
-    if (nfcId == null || nfcId.isEmpty || token == null || token.isEmpty) return null;
-    return PairingPayload(nfcId: nfcId, token: token);
+    if (token == null || token.isEmpty) return null;
+    return PairingPayload(token: token);
   }
 
   static Future<void> setPairingPayload(PairingPayload? payload) async {
     final p = await SharedPreferences.getInstance();
+    // Legacy nfc-id key was retired with the QR-based flow; clear it on every
+    // write so old installs don't leave stale data behind.
+    await p.remove(_pairNfcIdKey);
     if (payload == null) {
-      await p.remove(_pairNfcIdKey);
       await p.remove(_pairTokenKey);
       return;
     }
-    await p.setString(_pairNfcIdKey, payload.nfcId);
     await p.setString(_pairTokenKey, payload.token);
   }
 
