@@ -285,6 +285,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   refreshing: _refreshing,
                   onRefresh: _refresh,
                   onOpenWorkout: _openWorkout,
+                  liveReps: _liveReps,
                 ),
         ),
       ),
@@ -476,6 +477,7 @@ class _WorkoutsPanel extends StatefulWidget {
     required this.refreshing,
     required this.onRefresh,
     required this.onOpenWorkout,
+    required this.liveReps,
   });
 
   final List<Workout> workouts;
@@ -484,6 +486,7 @@ class _WorkoutsPanel extends StatefulWidget {
   final bool refreshing;
   final Future<void> Function() onRefresh;
   final void Function(Workout workout) onOpenWorkout;
+  final RepLiveService liveReps;
 
   @override
   State<_WorkoutsPanel> createState() => _WorkoutsPanelState();
@@ -529,6 +532,7 @@ class _WorkoutsPanelState extends State<_WorkoutsPanel> {
 
     return Column(
       children: [
+        _ActiveWorkoutBanner(liveReps: widget.liveReps, colorScheme: scheme),
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
           child: SearchBar(
@@ -758,6 +762,204 @@ class _ConnectionDot extends StatelessWidget {
               alpha: 0.5,
             ),
             blurRadius: 4,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Top-of-tab banner shown on the Workouts screen while a session is in
+/// progress. Features a static preview image of the machine, the live rep
+/// counter (sourced from [RepLiveService]), and the active machine name.
+/// Animates in/out as reps start/stop flowing so the rest of the screen
+/// (workout history) remains usable when nothing is active.
+class _ActiveWorkoutBanner extends StatelessWidget {
+  const _ActiveWorkoutBanner({
+    required this.liveReps,
+    required this.colorScheme,
+  });
+
+  final RepLiveService liveReps;
+  final ColorScheme colorScheme;
+
+  // A workout is "active" if we've seen a rep recently. We keep the banner
+  // visible for a short window after the last rep so it doesn't pop in/out
+  // between sets - the Pi-side auto-logout fires at 5 minutes anyway.
+  static const Duration _activeWindow = Duration(minutes: 5);
+
+  bool _isActive(DateTime now) {
+    final last = liveReps.lastEvent;
+    if (last == null || liveReps.repCount <= 0) return false;
+    return now.difference(last.receivedAt) < _activeWindow;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: liveReps,
+      builder: (context, _) {
+        final now = DateTime.now();
+        final active = _isActive(now);
+        return AnimatedSize(
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 220),
+            child: !active
+                ? const SizedBox(
+                    key: ValueKey('inactive'),
+                    width: double.infinity,
+                  )
+                : Padding(
+                    key: const ValueKey('active'),
+                    padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
+                    child: _ActiveWorkoutCard(
+                      liveReps: liveReps,
+                      colorScheme: colorScheme,
+                    ),
+                  ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ActiveWorkoutCard extends StatelessWidget {
+  const _ActiveWorkoutCard({
+    required this.liveReps,
+    required this.colorScheme,
+  });
+
+  final RepLiveService liveReps;
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    final last = liveReps.lastEvent;
+    final repCount = liveReps.repCount;
+    final machine = (last?.machine.isEmpty ?? true) ? 'Bench' : last!.machine;
+    final theme = Theme.of(context);
+
+    return FrostedPanel(
+      borderRadius: BorderRadius.circular(24),
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // Static machine preview (single image; not the per-frame Pi animation).
+          ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: Container(
+              width: 96,
+              height: 116,
+              color: colorScheme.surfaceContainerHighest,
+              alignment: Alignment.center,
+              child: Image.asset(
+                'assets/machine_preview.png',
+                fit: BoxFit.cover,
+                width: 96,
+                height: 116,
+                errorBuilder: (_, _, _) => Icon(
+                  Icons.fitness_center,
+                  size: 48,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: colorScheme.primary.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(99),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 7,
+                            height: 7,
+                            decoration: BoxDecoration(
+                              color: Colors.greenAccent.shade400,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'LIVE',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1.2,
+                              color: colorScheme.primary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  machine,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w800),
+                ),
+                Text(
+                  'Workout in progress',
+                  style: TextStyle(
+                    color: colorScheme.onSurface.withValues(alpha: 0.7),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.lastBaseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 220),
+                      transitionBuilder: (child, anim) => ScaleTransition(
+                        scale: anim,
+                        child: FadeTransition(opacity: anim, child: child),
+                      ),
+                      child: Text(
+                        '$repCount',
+                        key: ValueKey<int>(repCount),
+                        style: theme.textTheme.displayMedium?.copyWith(
+                          fontWeight: FontWeight.w900,
+                          color: colorScheme.primary,
+                          height: 1,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Text(
+                        'reps',
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          color: colorScheme.onSurface.withValues(alpha: 0.7),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ],
       ),
